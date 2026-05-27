@@ -323,8 +323,100 @@ def extraire_dimensions_depuis_edge_cuts(
     return largeur, hauteur
 
 
+def extraire_echelle_coordonnees(chemin_source: Path, valeur_defaut: int = 6) -> int:
+    """Extrait l'échelle d'un fichier Gerber/Excellon, sinon renvoie une valeur par défaut."""
+    patron_format = re.compile(r"%FS[LT][AI]X\d(\d)Y\d(\d)\*%")
+    with chemin_source.open("r", encoding="utf-8", errors="ignore") as f:
+        for ligne in f:
+            match = patron_format.search(ligne.strip())
+            if match:
+                return max(int(match.group(1)), int(match.group(2)))
+    return valeur_defaut
+
+
+def translater_ligne_coordonnees(
+    ligne: str,
+    delta_x: int,
+    delta_y: int,
+) -> str:
+    """Translate les coordonnées X/Y d'une ligne de Gerber ou d'Excellon."""
+    patron_coord = re.compile(r"(?P<axe>[XY])(?P<valeur>-?\d+)")
+
+    def remplacer(match: re.Match[str]) -> str:
+        axe = match.group("axe")
+        valeur = int(match.group("valeur"))
+        if axe == "X":
+            return f"X{valeur + delta_x}"
+        return f"Y{valeur + delta_y}"
+
+    if "X" not in ligne and "Y" not in ligne:
+        return ligne
+    return patron_coord.sub(remplacer, ligne)
+
+
+def copier_fichier_avec_offset(
+    source: Path,
+    destination: Path,
+    offset_x_mm: float,
+    offset_y_mm: float,
+) -> None:
+    """Copie un fichier Gerber/Excellon en décalant ses coordonnées."""
+    echelle = extraire_echelle_coordonnees(source)
+    delta_x = int(round(offset_x_mm * (10**echelle)))
+    delta_y = int(round(offset_y_mm * (10**echelle)))
+
+    with source.open(
+        "r", encoding="utf-8", errors="ignore"
+    ) as entree, destination.open("w", encoding="utf-8") as sortie:
+        for ligne in entree:
+            sortie.write(translater_ligne_coordonnees(ligne, delta_x, delta_y))
+
+
+def preparer_gerbers_avec_offset(
+    dossier_source: Path,
+    front: Path | None,
+    back: Path | None,
+    drill: Path | None,
+    dossier_travail: Path,
+    offset_x_mm: float,
+    offset_y_mm: float,
+) -> tuple[Path | None, Path | None, Path | None]:
+    """Crée des copies décalées des fichiers Gerber utilisés par pcb2gcode."""
+    if offset_x_mm == 0 and offset_y_mm == 0:
+        return front, back, drill
+
+    dossier_offset = dossier_travail / "gerbers_offset"
+    dossier_offset.mkdir(parents=True, exist_ok=True)
+
+    fichiers_source = [
+        p
+        for p in dossier_source.iterdir()
+        if p.is_file() and p.suffix.lower() in {".gbr", ".drl"}
+    ]
+    for source in fichiers_source:
+        destination = dossier_offset / source.name
+        copier_fichier_avec_offset(source, destination, offset_x_mm, offset_y_mm)
+
+    front_offset = dossier_offset / front.name if front else None
+    back_offset = dossier_offset / back.name if back else None
+    drill_offset = dossier_offset / drill.name if drill else None
+    return front_offset, back_offset, drill_offset
+
+
+def demander_offset_gerber() -> tuple[float, float]:
+    """Demande un décalage X/Y en mm pour les fichiers Gerber."""
+    offset_x_texte = input_retour("Offset X en mm (défaut 0): ").strip()
+    offset_y_texte = input_retour("Offset Y en mm (défaut 0): ").strip()
+    offset_x = float(offset_x_texte) if offset_x_texte else 0.0
+    offset_y = float(offset_y_texte) if offset_y_texte else 0.0
+    return offset_x, offset_y
+
+
 def lecture_dossier_de_dossier(
-    config: dict[str, Any], chemin_dossier: str | Path
+    config: dict[str, Any],
+    chemin_dossier: str | Path,
+    offset_x_mm: float = 0.0,
+    offset_y_mm: float = 0.0,
 ) -> list[str] | None:
     """
     extrait tous les sous-dossiers d'un dossier donné
@@ -337,7 +429,7 @@ def lecture_dossier_de_dossier(
     list_name_dir: list[str] = []
     for subdir in p.iterdir():
         if subdir.is_dir():
-            lancer(config, subdir)
+            lancer(config, subdir, offset_x_mm=offset_x_mm, offset_y_mm=offset_y_mm)
             list_name_dir.append(subdir.name)
 
     return list_name_dir
@@ -466,14 +558,20 @@ def finaliser_generation(
         print(f"\n[ERREUR] pcb2gcode a retourné le code {resultat.returncode}")
 
 
-def lancer(config: dict[str, Any], dossier: str | Path) -> None:
+def lancer(
+    config: dict[str, Any],
+    dossier: str | Path,
+    offset_x_mm: float = 0.0,
+    offset_y_mm: float = 0.0,
+) -> None:
     """
     Lance le processus de génération de G-code
     à partir des fichiers GBR en utilisant pcb2gcode.
     """
 
+    dossier_source = Path(dossier)
     front, back, drill, output, hauteur_pcb, largeur_pcb = lecture_chemin_dossier(
-        dossier
+        dossier_source
     )
     front_effectif, back_effectif, drill_effectif = verifier_fichiers_entree(
         front, back, drill
@@ -487,6 +585,16 @@ def lancer(config: dict[str, Any], dossier: str | Path) -> None:
 
     output = preparer_dossier_sortie(output)
     pcb2gcode_exe = resoudre_executable_pcb2gcode(config)
+
+    front_effectif, back_effectif, drill_effectif = preparer_gerbers_avec_offset(
+        dossier_source,
+        front_effectif,
+        back_effectif,
+        drill_effectif,
+        output,
+        offset_x_mm,
+        offset_y_mm,
+    )
 
     commande = construire_commande(
         config,
@@ -626,7 +734,8 @@ def gerer_choix_menu(choix: str, config: dict[str, Any]) -> bool:
         if choix == "1":
             os.system("cls")
             demande_user = demander_chemin("les fichiers GBR")
-            lancer(config, demande_user)
+            offset_x_mm, offset_y_mm = demander_offset_gerber()
+            lancer(config, demande_user, offset_x_mm, offset_y_mm)
             return False
         if choix == "2":
             os.system("cls")
@@ -639,7 +748,8 @@ def gerer_choix_menu(choix: str, config: dict[str, Any]) -> bool:
         if choix == "4":
             os.system("cls")
             demande_user = demander_chemin("les dossiers des projets")
-            lecture_dossier_de_dossier(config, demande_user)
+            offset_x_mm, offset_y_mm = demander_offset_gerber()
+            lecture_dossier_de_dossier(config, demande_user, offset_x_mm, offset_y_mm)
             return False
         if choix == "5":
             os.system("cls")
