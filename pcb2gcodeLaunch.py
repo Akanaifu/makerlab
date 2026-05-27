@@ -340,6 +340,12 @@ def translater_ligne_coordonnees(
     delta_y: int,
 ) -> str:
     """Translate les coordonnées X/Y d'une ligne de Gerber ou d'Excellon."""
+    texte = ligne.strip()
+    if not texte or texte.startswith("%"):
+        return ligne
+    if not texte.startswith(("X", "Y")):
+        return ligne
+
     patron_coord = re.compile(r"(?P<axe>[XY])(?P<valeur>-?\d+)")
 
     def remplacer(match: re.Match[str]) -> str:
@@ -349,8 +355,6 @@ def translater_ligne_coordonnees(
             return f"X{valeur + delta_x}"
         return f"Y{valeur + delta_y}"
 
-    if "X" not in ligne and "Y" not in ligne:
-        return ligne
     return patron_coord.sub(remplacer, ligne)
 
 
@@ -733,8 +737,8 @@ def gerer_choix_menu(choix: str, config: dict[str, Any]) -> bool:
     try:
         if choix == "1":
             os.system("cls")
-            demande_user = demander_chemin("les fichiers GBR")
             offset_x_mm, offset_y_mm = demander_offset_gerber()
+            demande_user = demander_chemin("les fichiers GBR")
             lancer(config, demande_user, offset_x_mm, offset_y_mm)
             return False
         if choix == "2":
@@ -747,8 +751,8 @@ def gerer_choix_menu(choix: str, config: dict[str, Any]) -> bool:
             return False
         if choix == "4":
             os.system("cls")
-            demande_user = demander_chemin("les dossiers des projets")
             offset_x_mm, offset_y_mm = demander_offset_gerber()
+            demande_user = demander_chemin("les dossiers des projets")
             lecture_dossier_de_dossier(config, demande_user, offset_x_mm, offset_y_mm)
             return False
         if choix == "5":
