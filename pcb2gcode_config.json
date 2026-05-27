@@ -1,5 +1,5 @@
 {
-  "pcb2gcode_exe": "./pcb2gcode.exe",
+  "pcb2gcode_exe": "./pcb2gcode/pcb2gcode.exe",
   "parametres": {
     "metric": 1,
     "metricoutput": 1,
