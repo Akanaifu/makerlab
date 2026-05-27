@@ -3,6 +3,21 @@ import re
 import json
 import subprocess
 from typing import Any
+import os
+
+
+# Exception levée quand l'utilisateur demande de revenir au menu principal
+class RetourMenu(Exception):
+    pass
+
+
+def input_retour(prompt: str) -> str:
+    """Lit une entrée utilisateur; lève `RetourMenu` si l'utilisateur saisit 'retour'."""
+    s = input(prompt).strip()
+    if s.lower() in ("retour", "r"):
+        raise RetourMenu()
+    return s
+
 
 CONFIG_FILE: Path = "./pcb2gcode_config.json"
 
@@ -33,14 +48,14 @@ def afficher_parametres(config: dict[str, Any]) -> None:
 
 def lire_choix_parametre() -> str:
     """Lit le nom du paramètre à modifier."""
-    return input(
+    return input_retour(
         "Entrez le nom du paramètre à modifier (ou 'retour' pour revenir):\n> "
-    ).strip()
+    )
 
 
 def lire_nouvelle_valeur(libelle: str, valeur_actuelle: Any) -> str:
     """Lit une nouvelle valeur utilisateur pour un paramètre donné."""
-    return input(f"  Nouvelle valeur pour {libelle} [{valeur_actuelle}]: ").strip()
+    return input_retour(f"  Nouvelle valeur pour {libelle} [{valeur_actuelle}]: ")
 
 
 def convertir_valeur_parametre(ancienne_valeur: Any, nouvelle_valeur: str) -> Any:
@@ -221,17 +236,10 @@ def construire_commande(
     return cmd
 
 
-def demander_nom_base(dossier: str | Path) -> str:
-    """Demande le nom de base des fichiers Gerber."""
-    prediction_nom = Path(dossier).name
-    nom = input(f"Nom de base des fichiers (défaut: '{prediction_nom}'): ").strip()
-    return nom or prediction_nom
-
-
 def demander_dimensions_pcb() -> tuple[float, float]:
     """Demande les dimensions du PCB."""
-    largeur_pcb = float(input("Largeur du pcb (en mm): "))
-    hauteur_pcb = float(input("Longueur du pcb (en mm): "))
+    largeur_pcb = float(input_retour("Largeur du pcb (en mm): "))
+    hauteur_pcb = float(input_retour("Longueur du pcb (en mm): "))
     return largeur_pcb, hauteur_pcb
 
 
@@ -422,15 +430,21 @@ def preparer_dossier_sortie(output: str | Path) -> Path:
 
 def resoudre_executable_pcb2gcode(config: dict[str, Any]) -> str:
     """Garantit que le chemin de pcb2gcode pointe vers un fichier existant."""
-    pcb2gcode_exe = config["pcb2gcode_exe"]
-    if Path(pcb2gcode_exe).is_file():
-        return pcb2gcode_exe
+    pcb2gcode_exe = str(config.get("pcb2gcode_exe", "")).strip()
 
-    pcb2gcode_exe = input(
-        f"\npcb2gcode.exe introuvable à '{pcb2gcode_exe}'.\nChemin complet: "
-    ).strip()
-    config["pcb2gcode_exe"] = pcb2gcode_exe
-    sauvegarder_config(config)
+    # Tant que le chemin fourni n'est pas un fichier existant, redemander.
+    while not Path(pcb2gcode_exe).is_file():
+        pcb2gcode_exe = input_retour(
+            f"\npcb2gcode.exe introuvable à '{pcb2gcode_exe}'.\nChemin complet: "
+        ).strip()
+        if not pcb2gcode_exe:
+            print("Chemin vide — veuillez saisir le chemin complet vers pcb2gcode.exe.")
+            continue
+
+        # Sauvegarder la nouvelle valeur dans la config pour la prochaine exécution
+        config["pcb2gcode_exe"] = pcb2gcode_exe
+        sauvegarder_config(config)
+
     return pcb2gcode_exe
 
 
@@ -601,27 +615,41 @@ def lire_choix_menu_principal() -> str:
 
 def demander_chemin(chemin_cherche: str) -> str:
     """Demande le dossier contenant les fichiers Gerber d'un projet."""
-    return input(f"Chemin du dossier contenant {chemin_cherche}: ").strip()
+    return input_retour(
+        f"Chemin du dossier contenant {chemin_cherche} (ou 'retour' pour revenir):"
+    )
 
 
 def gerer_choix_menu(choix: str, config: dict[str, Any]) -> bool:
     """Exécute l'action associée au choix du menu principal."""
-    if choix == "1":
-        lancer(config, demander_chemin("les fichiers GBR"))
+    try:
+        if choix == "1":
+            os.system("cls")
+            demande_user = demander_chemin("les fichiers GBR")
+            lancer(config, demande_user)
+            return False
+        if choix == "2":
+            os.system("cls")
+            modifier_parametres(config)
+            return False
+        if choix == "3":
+            os.system("cls")
+            afficher_parametres(config)
+            return False
+        if choix == "4":
+            os.system("cls")
+            demande_user = demander_chemin("les dossiers des projets")
+            lecture_dossier_de_dossier(config, demande_user)
+            return False
+        if choix == "5":
+            os.system("cls")
+            return True
+        print("Choix invalide.\n")
         return False
-    if choix == "2":
-        modifier_parametres(config)
+    except RetourMenu:
+        os.system("cls")
+        print("Retour au menu principal demandé — annulation de l'opération.")
         return False
-    if choix == "3":
-        afficher_parametres(config)
-        return False
-    if choix == "4":
-        lecture_dossier_de_dossier(config, demander_chemin("les dossiers des projets"))
-        return False
-    if choix == "5":
-        return True
-    print("Choix invalide.\n")
-    return False
 
 
 if __name__ == "__main__":
